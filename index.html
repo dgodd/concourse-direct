@@ -1,0 +1,111 @@
+<html>
+  <head>
+    <title>Concourse Summary Direct</title>
+    <script src="https://vuejs.org/js/vue.js"></script>
+    <link rel="icon" type="image/png" href="https://concourse-summary-crystal.cfapps.io/favicon.png" sizes="32x32">
+    <link rel="stylesheet" type="text/css" href="https://concourse-summary-crystal.cfapps.io/styles.css">
+  </head>
+  <body>
+    <div id="app">
+      <div class="time">
+        {{last_loaded}} (<span id="countdown">{{counter}}</span>)
+        <div class="right">
+          <a class="github" href="https://github.com/dgodd/concourse-direct" target="_blank">&nbsp;</a>
+        </div>
+      </div>
+
+      <div class="scalable">
+        <a v-for="p in pipelines" v-bind:style="{width: boxWidthPx, height: boxHeightPx}" v-bind:href="p | pipelineHref" target="_blank" v-bind:class="{outer: true, running: p.running}">
+          <div class="status">
+            <div class="paused_job" v-bind:style="p | percent('paused_job')"></div>
+            <div class="aborted" v-bind:style="p | percent('aborted')"></div>
+            <div class="errored" v-bind:style="p | percent('errored')"></div>
+            <div class="failed" v-bind:style="p | percent('failed')"></div>
+            <div class="succeeded" v-bind:style="p | percent('succeeded')"></div>
+          </div>
+          <div v-if="p.paused" class="paused">&nbsp;</div>
+          <div class="inner" v-bind:style="{fontSize: txtFontSize(p.name, boxWidth)}">{{p.name}}</div>
+        </a>
+      </div>
+    </div>
+
+    <script>
+      function getTextWidth(text) {
+        var canvas = getTextWidth.canvas || (getTextWidth.canvas = document.createElement("canvas"));
+        var context = canvas.getContext("2d");
+        context.font = '20px monospace, sans-serif';
+        var metrics = context.measureText(text);
+        return metrics.width;
+      }
+      new Vue({
+        el: '#app',
+        data: {
+          last_loaded: null,
+          counter: 0,
+          jobs: []
+        },
+        created: function() {
+          this.setupStream()
+          setInterval(() => { this.counter += 1 }, 1000)
+        },
+        computed: {
+          numBoxesAcross: function() {
+            return window.innerWidth * (window.innerHeight - 40) / Object.keys(this.pipelines).length
+          },
+          boxWidth: function() { return Math.floor(Math.sqrt(this.numBoxesAcross)) - 4 },
+          boxWidthPx: function() { return this.boxWidth + 'px' },
+          boxHeight: function() { return Math.floor(this.boxWidth * 2 / 3) },
+          boxHeightPx: function() { return this.boxHeight + 'px' },
+          pipelines: function() {
+            var hash = {}
+            for (var j of this.jobs) {
+              hash[j.Pipeline] = hash[j.Pipeline] || {name: j.Pipeline, paused: j.PipelinePaused, running: false, total: 0}
+              var status = j.JobPaused ? 'paused_job' : j.Status
+              hash[j.Pipeline][status] = (hash[j.Pipeline][status] || 0) + 1
+              hash[j.Pipeline].total = hash[j.Pipeline].total + 1
+              if (!j.EndTime) {
+                hash[j.Pipeline].running = true
+              }
+            }
+            return hash
+          }
+        },
+        filters: {
+          percent: function(obj, key) {
+            return { width: ((obj[key] || 0) * 100 / obj.total) + '\x25' }
+          },
+          pipelineHref: function(p) {
+            return "https://buildpacks.ci.cf-app.com/teams/main/pipelines/" + p.name
+          }
+        },
+        methods: {
+          txtFontSize: function(txt, maxWidth) {
+            var w = getTextWidth(txt) + 30
+            if (w > maxWidth) {
+              return Math.floor(20 * maxWidth / w) + 'px'
+            } else {
+              return '20px'
+            }
+          },
+          setupStream: function() {
+            let es = new EventSource('/events/jobs');
+
+            es.addEventListener('message', event => {
+              this.jobs = JSON.parse(event.data)
+              console.log(this.jobs)
+              this.counter = 0
+              this.last_loaded = (new Date()).toLocaleTimeString()
+            }, false)
+
+            es.addEventListener('error', event => {
+              if (event.readyState == EventSource.CLOSED) {
+                console.log('Event was closed')
+                console.log(EventSource)
+              }
+            }, false)
+          }
+        }
+      })
+    </script>
+  </body>
+</html>
