@@ -23,6 +23,7 @@ type Record struct {
 	EndTime        *time.Time
 	PipelinePaused bool
 	JobPaused      bool
+	Ordering       int
 }
 
 var db *sql.DB
@@ -36,7 +37,7 @@ func init() {
 }
 
 func AllJobs() []Record {
-	rows, err := db.Query("select p.name, j.name, b.build_id, b.name, b.status, b.start_time, b.end_time, p.paused, j.paused FROM pipelines p JOIN jobs j ON(j.pipeline_id=p.id) JOIN (select DISTINCT job_id,first_value(id) over (PARTITION BY job_id ORDER BY id DESC) as build_id, first_value(name) over (PARTITION BY job_id ORDER BY id DESC) as name, first_value(status) over (PARTITION BY job_id ORDER BY id DESC) as status, first_value(start_time) over (PARTITION BY job_id ORDER BY id DESC) as start_time, first_value(end_time) over (PARTITION BY job_id ORDER BY id DESC) as end_time FROM builds) AS b ON(b.job_id=j.id) WHERE j.active ORDER BY p.ordering, j.name, b.name")
+	rows, err := db.Query("select p.name as pipeline_name, j.name as job_name, b.id as build_id, b.name as build_name, b.status, b.start_time, b.end_time, p.paused as pipeline_paused, j.paused as job_paused, p.ordering FROM pipelines p JOIN jobs j ON(j.pipeline_id=p.id AND j.active) JOIN builds b ON(b.job_id=j.id AND b.id in (select max(id) as id from builds group by job_id)) order by p.ordering")
 	if err != nil {
 		log.Panic(err)
 	}
@@ -44,7 +45,7 @@ func AllJobs() []Record {
 	var records []Record
 	for rows.Next() {
 		var r = Record{}
-		err = rows.Scan(&r.Pipeline, &r.Job, &r.BuildID, &r.BuildNum, &r.Status, &r.StartTime, &r.EndTime, &r.PipelinePaused, &r.JobPaused)
+		err = rows.Scan(&r.Pipeline, &r.Job, &r.BuildID, &r.BuildNum, &r.Status, &r.StartTime, &r.EndTime, &r.PipelinePaused, &r.JobPaused, &r.Ordering)
 		if err != nil {
 			fmt.Print(err)
 		} else {
