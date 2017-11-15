@@ -11,6 +11,7 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+	"github.com/r3labs/sse"
 )
 
 type Record struct {
@@ -36,10 +37,10 @@ func init() {
 	}
 }
 
-func AllJobs() []Record {
+func AllJobs() ([]Record, error) {
 	rows, err := db.Query("select p.name as pipeline_name, j.name as job_name, b.id as build_id, b.name as build_name, b.status, b.start_time, b.end_time, p.paused as pipeline_paused, j.paused as job_paused, p.ordering FROM pipelines p JOIN jobs j ON(j.pipeline_id=p.id AND j.active) JOIN builds b ON(b.job_id=j.id AND b.id in (select max(id) as id from builds group by job_id)) order by p.ordering")
 	if err != nil {
-		log.Panic(err)
+		return nil, err
 	}
 
 	var records []Record
@@ -48,66 +49,32 @@ func AllJobs() []Record {
 		err = rows.Scan(&r.Pipeline, &r.Job, &r.BuildID, &r.BuildNum, &r.Status, &r.StartTime, &r.EndTime, &r.PipelinePaused, &r.JobPaused, &r.Ordering)
 		if err != nil {
 			fmt.Print(err)
+			return nil, err
 		} else {
 			records = append(records, r)
 		}
 	}
 
-	return records
+	return records, nil
 }
 
 func main() {
-	http.HandleFunc("/events/jobs", func(w http.ResponseWriter, r *http.Request) {
-		// We need to be able to flush for SSE
-		fl, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "Flushing not supported", http.StatusNotImplemented)
-			return
-		}
+	server := sse.New()
 
-		// Returns a channel that blocks until the connection is closed
-		cn, ok := w.(http.CloseNotifier)
-		if !ok {
-			http.Error(w, "Closing not supported", http.StatusNotImplemented)
-			return
-		}
-		close := cn.CloseNotify()
+	server.CreateStream("jobs")
+	http.HandleFunc("/events", server.HTTPHandler)
 
-		// Set headers for SSE
-		h := w.Header()
-		h.Set("Cache-Control", "no-cache")
-		h.Set("Connection", "keep-alive")
-		h.Set("Content-Type", "text/event-stream")
-
-		// Connect new client
-		// cl := make(client, s.bufSize)
-		// s.connecting <- cl
-
-		sendData := func() {
-			records := AllJobs()
-			txt, err := json.Marshal(records)
-			if err != nil {
-				log.Panic(err)
-			}
-			w.Write([]byte("data: " + string(txt) + "\n\n"))
-			fl.Flush()
-			// fmt.Println("Data sent")
-		}
-		sendData()
-
-		timer := time.NewTicker(time.Second * 3)
+	go func() {
 		for {
-			select {
-			case <-close:
-				// Disconnect the client when the connection is closed
-				// s.disconnecting <- cl
-				return
-
-			case <-timer.C:
-				sendData()
+			if records, err := AllJobs(); err == nil {
+				if txt, err := json.Marshal(records); err == nil {
+					txt = []byte(string(txt) + "\n\n")
+					server.Publish("jobs", &sse.Event{Data: txt})
+				}
 			}
+			time.Sleep(time.Second)
 		}
-	})
+	}()
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if txt, err := ioutil.ReadFile("index.html"); err != nil {
